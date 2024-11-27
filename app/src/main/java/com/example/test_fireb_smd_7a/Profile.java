@@ -1,8 +1,11 @@
 package com.example.test_fireb_smd_7a;
 
+import android.app.ProgressDialog;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.net.Uri;
 import android.os.Bundle;
+import android.provider.MediaStore;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.widget.Button;
@@ -12,6 +15,8 @@ import android.widget.TextView;
 import android.widget.Toast;
 
 import androidx.activity.EdgeToEdge;
+import androidx.activity.result.ActivityResultLauncher;
+import androidx.activity.result.contract.ActivityResultContracts;
 import androidx.annotation.NonNull;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
@@ -19,12 +24,20 @@ import androidx.core.graphics.Insets;
 import androidx.core.view.ViewCompat;
 import androidx.core.view.WindowInsetsCompat;
 
+import com.google.android.gms.tasks.OnCompleteListener;
 import com.google.android.gms.tasks.OnFailureListener;
 import com.google.android.gms.tasks.OnSuccessListener;
+import com.google.android.gms.tasks.Task;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
 import com.google.firebase.firestore.DocumentSnapshot;
 import com.google.firebase.firestore.FirebaseFirestore;
+import com.google.firebase.storage.FirebaseStorage;
+import com.google.firebase.storage.StorageReference;
+import com.google.firebase.storage.UploadTask;
+import com.squareup.picasso.Picasso;
+
+import java.util.HashMap;
 
 public class Profile extends AppCompatActivity {
 
@@ -36,6 +49,36 @@ public class Profile extends AppCompatActivity {
     String uID;
     TextView tvName, tvEmail, tvPhone, tvBloodGroup;
     ImageView ivProfilePic;
+    FirebaseStorage firebaseStorage;
+    StorageReference storageReference;
+    ActivityResultLauncher<Intent> launcher = registerForActivityResult(new ActivityResultContracts.StartActivityForResult(),
+            (v)->{
+        if(v.getResultCode() == RESULT_OK && v.getData()!=null)
+        {
+            Uri imageUri = v.getData().getData();
+            saveProfileImageToDB(imageUri);
+
+        }
+            });
+
+    private void saveProfileImageToDB(Uri imageUri) {
+        storageReference.child("users/"+uID+"/profile.jpg")
+                .putFile(imageUri)
+                .addOnCompleteListener(new OnCompleteListener<UploadTask.TaskSnapshot>() {
+                    @Override
+                    public void onComplete(@NonNull Task<UploadTask.TaskSnapshot> task) {
+                        if(task.isSuccessful())
+                        {
+                            Toast.makeText(Profile.this, "Profile image set", Toast.LENGTH_SHORT).show();
+                            ivProfilePic.setImageURI(imageUri);
+                        }
+                        else
+                        {
+                            Toast.makeText(Profile.this, task.getException().getMessage(), Toast.LENGTH_SHORT).show();
+                        }
+                    }
+                });
+    }
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -49,7 +92,6 @@ public class Profile extends AppCompatActivity {
         });
         init();
         user.reload();
-
 
 
         if(user==null)
@@ -103,9 +145,20 @@ public class Profile extends AppCompatActivity {
             }
         });
 
+        ivProfilePic.setOnClickListener((v)->{
+            Intent intent = new Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI);
+            launcher.launch(intent);
+        });
+
     }
 
     private void loadProfile() {
+        ProgressDialog progressDialog = new ProgressDialog(this);
+        progressDialog.setMessage("Loading Profile");
+        progressDialog.show();
+
+        loadProfilePic();
+
         db.collection("users")
                 .document(uID)
                 .get()
@@ -119,9 +172,30 @@ public class Profile extends AppCompatActivity {
                                 tvPhone.setText("Phone : " + documentSnapshot.getString("phone"));
                                 tvName.setText("Name : " + documentSnapshot.getString("name"));
                                 tvBloodGroup.setText("BloodGroup : " + documentSnapshot.getString("bloodgroup"));
-                            }
 
+                            }
+                            progressDialog.dismiss();
                         }
+                    }
+                })
+                .addOnFailureListener(new OnFailureListener() {
+                    @Override
+                    public void onFailure(@NonNull Exception e) {
+                        Toast.makeText(Profile.this, e.getMessage(), Toast.LENGTH_SHORT).show();
+                        progressDialog.dismiss();
+                    }
+                });
+
+
+    }
+
+    private void loadProfilePic() {
+        storageReference.child("users/"+uID+"/profile.jpg")
+                .getDownloadUrl()
+                .addOnSuccessListener(new OnSuccessListener<Uri>() {
+                    @Override
+                    public void onSuccess(Uri uri) {
+                        Picasso.get().load(uri).into(ivProfilePic);
                     }
                 })
                 .addOnFailureListener(new OnFailureListener() {
@@ -148,10 +222,14 @@ public class Profile extends AppCompatActivity {
         user = auth.getCurrentUser();
         uID = user.getUid();
         db = FirebaseFirestore.getInstance();
+        firebaseStorage = FirebaseStorage.getInstance();
+        storageReference = firebaseStorage.getReference();
     }
 
     public void editProfile(View view)
     {
+        ProgressDialog progressDialog = new ProgressDialog(this);
+        Toast.makeText(this, "edit clicked", Toast.LENGTH_SHORT).show();
         View v = LayoutInflater.from(this)
                 .inflate(R.layout.edit_profile_dialog_view, null, false);
         EditText etName = v.findViewById(R.id.etName);
@@ -183,13 +261,35 @@ public class Profile extends AppCompatActivity {
                     }
                 });
 
+
         AlertDialog.Builder editDialog = new AlertDialog.Builder(this)
                 .setTitle("Edit Profile")
                 .setView(v)
                 .setPositiveButton("Save", new DialogInterface.OnClickListener() {
                     @Override
                     public void onClick(DialogInterface dialogInterface, int i) {
+                        progressDialog.show();
 
+
+                        db.collection("users")
+                                .document(uID)
+                                .update("name", etName.getText().toString().trim(),
+                                        "phone", etPhone.getText().toString().trim(),
+                                        "bloodgroup", etBloodgroup.getText().toString().trim())
+                                .addOnCompleteListener(new OnCompleteListener<Void>() {
+                                    @Override
+                                    public void onComplete(@NonNull Task<Void> task) {
+                                        if(task.isSuccessful())
+                                        {
+                                            Toast.makeText(Profile.this, "Profile Updated", Toast.LENGTH_SHORT).show();
+                                        }
+                                        else
+                                        {
+                                            Toast.makeText(Profile.this, task.getException().getMessage(), Toast.LENGTH_SHORT).show();
+                                        }
+                                        progressDialog.dismiss();
+                                    }
+                                });
                     }
                 })
                 .setNegativeButton("Cancel", new DialogInterface.OnClickListener() {
